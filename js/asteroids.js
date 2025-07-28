@@ -170,10 +170,12 @@ const keys = {};
 
 let gameState = 'playing'; // 'playing' | 'paused' | 'help' | 'gameOver'
 let score = 0;
+let lives = 3;
 let ship, asteroids, bullets, particles;
 
 function resetGame() {
   score = 0;
+  lives = 3;
   ship = new Ship();
   asteroids = Array.from({ length: 5 }, () =>
     new Asteroid(new Vec(Math.random() * W, Math.random() * H))
@@ -217,6 +219,24 @@ function explode(pos, color, count = 25) {
   for (let i = 0; i < count; i++) particles.push(new Particle(pos, color));
 }
 
+function shipCollision() {
+  if (ship.inv > 0) return;
+  for (const a of asteroids) {
+    if (Math.hypot(ship.pos.x - a.pos.x, ship.pos.y - a.pos.y) < a.r + ship.size) {
+      explode(ship.pos, '#ff00e6', 40);
+      lives--;
+      if (lives <= 0) {
+        quitGame();
+      } else {
+        ship.pos.set(W / 2, H / 2);
+        ship.vel.set(0, 0);
+        ship.inv = 120; // 2 s invulnerability
+      }
+      return;
+    }
+  }
+}
+
 /* ---------- Game loop ---------- */
 let lastShot = 0;
 function update() {
@@ -238,7 +258,7 @@ function update() {
   bullets = bullets.filter(b => b.life > 0);
   particles = particles.filter(p => p.life > 0);
 
-  /* collisions */
+  /* bullets vs asteroids */
   bullets.forEach((b, bi) => {
     asteroids.forEach((a, ai) => {
       if (Math.hypot(b.pos.x - a.pos.x, b.pos.y - a.pos.y) < a.r) {
@@ -253,6 +273,8 @@ function update() {
       }
     });
   });
+
+  shipCollision();
 }
 
 function drawHUD() {
@@ -261,6 +283,7 @@ function drawHUD() {
   ctx.fillText(`Score: ${score}`, 20, 30);
   const hs = loadHS();
   if (hs.length) ctx.fillText(`Best: ${hs[0]}`, 20, 60);
+  ctx.fillText(`Lives: ${lives}`, 20, 90);
 }
 
 function drawCenterText(text) {
@@ -274,7 +297,7 @@ function drawCenterText(text) {
 }
 
 function draw() {
-  ctx.fillStyle = 'rgba(12,12,12,0.3)';
+  ctx.fillStyle = '#0c0c0c';
   ctx.fillRect(0, 0, W, H);
 
   if (gameState === 'playing') {
