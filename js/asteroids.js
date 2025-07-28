@@ -70,12 +70,14 @@ class Asteroid {
     this.r = r || 30 + Math.random() * 40;
     this.vel = new Vec(Math.random() - .5, Math.random() - .5).mul(1 + Math.random() * 2);
     this.color = ['#00faff', '#ff00e6', '#00ff8f', '#ffe600'][Math.floor(Math.random() * 4)];
-    this.vertices = Array.from({ length: 8 }, () =>
-      new Vec(
-        Math.cos(Math.random() * Math.PI * 2) * this.r,
-        Math.sin(Math.random() * Math.PI * 2) * this.r
-      )
-    );
+    const count = 8;
+    const step = (Math.PI * 2) / count;
+    this.vertices = Array.from({ length: count }, (_, i) => {
+      const jitter = 0.18;
+      const radius = this.r * (1 + (Math.random() - 0.5) * jitter);
+      const angle = i * step;
+      return new Vec(Math.cos(angle) * radius, Math.sin(angle) * radius);
+    });
   }
   update() { this.pos.add(this.vel); screenWrap(this); }
   draw() {
@@ -222,7 +224,10 @@ function explode(pos, color, count = 25) {
 function shipCollision() {
   if (ship.inv > 0) return;
   for (const a of asteroids) {
-    if (Math.hypot(ship.pos.x - a.pos.x, ship.pos.y - a.pos.y) < a.r + ship.size) {
+    const dx = ship.pos.x - a.pos.x;
+    const dy = ship.pos.y - a.pos.y;
+    const dist = Math.sqrt(dx * dx + dy * dy);
+    if (dist < a.r + ship.size) {
       explode(ship.pos, '#ff00e6', 40);
       lives--;
       if (lives <= 0) {
