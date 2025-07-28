@@ -59,8 +59,7 @@ class Asteroid {
     this.r = r || 30 + Math.random() * 40;
     this.vel = new Vec(Math.random() - 0.5, Math.random() - 0.5).mul(1 + Math.random() * 2);
     this.color = ['#00faff', '#ff00e6', '#00ff8f', '#ffe600'][Math.floor(Math.random() * 4)];
-    // 6–12 evenly-spaced vertices for a simple convex polygon
-    const edgeCount = 6 + Math.floor(Math.random() * 7);
+    const edgeCount = 6 + Math.floor(Math.random() * 7); // 6-12 edges
     const step = (Math.PI * 2) / edgeCount;
     this.vertices = Array.from({ length: edgeCount }, (_, i) => {
       const jitter = 0.25;
@@ -112,6 +111,7 @@ class Ship {
     this.thrusting = false;
     this.size = 15;
     this.inv = 0;
+    this.cooldown = 0; // collision cooldown
   }
   update() {
     if (keys['ArrowUp']) {
@@ -124,6 +124,7 @@ class Ship {
     this.pos.add(this.vel);
     screenWrap(this);
     if (this.inv > 0) this.inv--;
+    if (this.cooldown > 0) this.cooldown--;
   }
   draw() {
     ctx.save();
@@ -204,7 +205,7 @@ function explode(pos, color, count = 25) {
 
 /* ---------- SAFE collision handling ---------- */
 function handleCollisions() {
-  /* bullets vs asteroids (backwards loops to avoid mutation issues) */
+  /* bullets vs asteroids (backwards loops) */
   for (let i = bullets.length - 1; i >= 0; i--) {
     const b = bullets[i];
     for (let j = asteroids.length - 1; j >= 0; j--) {
@@ -225,23 +226,37 @@ function handleCollisions() {
     }
   }
 
-  /* ship vs asteroids (radius check) */
-  if (ship.inv <= 0) {
-    for (const a of asteroids) {
-      const dx = ship.pos.x - a.pos.x;
-      const dy = ship.pos.y - a.pos.y;
-      if (Math.sqrt(dx * dx + dy * dy) < a.r + ship.size) {
-        explode(ship.pos, '#ff00e6', 40);
-        lives--;
-        if (lives <= 0) {
-          quitGame();
-        } else {
-          ship.pos.set(W / 2, H / 2);
-          ship.vel.set(0, 0);
-          ship.inv = 120;
-        }
+  /* ship vs asteroids (cooldown + clear-spawn) */
+  if (ship.inv > 0 || (ship.cooldown && --ship.cooldown)) return;
+  for (const a of asteroids) {
+    const dx = ship.pos.x - a.pos.x;
+    const dy = ship.pos.y - a.pos.y;
+    if (Math.sqrt(dx * dx + dy * dy) < a.r + ship.size) {
+      explode(ship.pos, '#ff00e6', 40);
+      lives--;
+      if (lives <= 0) {
+        quitGame();
         return;
       }
+
+      /* push asteroids away from spawn point */
+      const safeRadius = 80;
+      asteroids.forEach(ast => {
+        const d = Math.hypot(ast.pos.x - W / 2, ast.pos.y - H / 2);
+        if (d < safeRadius + ast.r) {
+          const angle = Math.atan2(ast.pos.y - H / 2, ast.pos.x - W / 2);
+          ast.pos.x = W / 2 + Math.cos(angle) * (safeRadius + ast.r);
+          ast.pos.y = H / 2 + Math.sin(angle) * (safeRadius + ast.r);
+          screenWrap(ast);
+        }
+      });
+
+      /* reset ship */
+      ship.pos.set(W / 2, H / 2);
+      ship.vel.set(0, 0);
+      ship.inv = 120;
+      ship.cooldown = 30;
+      return;
     }
   }
 }
