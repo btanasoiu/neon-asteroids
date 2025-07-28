@@ -20,14 +20,8 @@ function loadHS() {
   try { return JSON.parse(localStorage.getItem(HS_KEY) || '[]'); }
   catch { return []; }
 }
-function saveHS(list) {
-  localStorage.setItem(HS_KEY, JSON.stringify(list.slice(0, 5)));
-}
-function addScore(score) {
-  const list = [...loadHS(), score].sort((a, b) => b - a);
-  saveHS(list);
-  return list;
-}
+function saveHS(list) { localStorage.setItem(HS_KEY, JSON.stringify(list.slice(0, 5))); }
+function addScore(score) { saveHS([...loadHS(), score].sort((a, b) => b - a)); }
 
 /* ---------- Vector helper ---------- */
 class Vec {
@@ -35,7 +29,6 @@ class Vec {
   add(v) { this.x += v.x; this.y += v.y; return this; }
   mul(s) { this.x *= s; this.y *= s; return this; }
   len() { return Math.hypot(this.x, this.y); }
-  normalize() { const l = this.len() || 1; this.x /= l; this.y /= l; return this; }
   clone() { return new Vec(this.x, this.y); }
   static fromAngle(a) { return new Vec(Math.cos(a), Math.sin(a)); }
 }
@@ -48,11 +41,7 @@ class Particle {
     this.life = 40;
     this.color = color;
   }
-  update() {
-    this.pos.add(this.vel);
-    this.vel.mul(0.97);
-    this.life--;
-  }
+  update() { this.pos.add(this.vel); this.vel.mul(0.97); this.life--; }
   draw() {
     ctx.fillStyle = this.color;
     ctx.globalAlpha = this.life / 40;
@@ -63,17 +52,18 @@ class Particle {
   }
 }
 
-/* ---------- Asteroid ---------- */
+/* ---------- Asteroid (random, non-intersecting) ---------- */
 class Asteroid {
   constructor(pos, r) {
     this.pos = pos;
     this.r = r || 30 + Math.random() * 40;
-    this.vel = new Vec(Math.random() - .5, Math.random() - .5).mul(1 + Math.random() * 2);
+    this.vel = new Vec(Math.random() - 0.5, Math.random() - 0.5).mul(1 + Math.random() * 2);
     this.color = ['#00faff', '#ff00e6', '#00ff8f', '#ffe600'][Math.floor(Math.random() * 4)];
-    const count = 8;
-    const step = (Math.PI * 2) / count;
-    this.vertices = Array.from({ length: count }, (_, i) => {
-      const jitter = 0.18;
+    // 6–12 evenly-spaced vertices for a simple convex polygon
+    const edgeCount = 6 + Math.floor(Math.random() * 7);
+    const step = (Math.PI * 2) / edgeCount;
+    this.vertices = Array.from({ length: edgeCount }, (_, i) => {
+      const jitter = 0.25;
       const radius = this.r * (1 + (Math.random() - 0.5) * jitter);
       const angle = i * step;
       return new Vec(Math.cos(angle) * radius, Math.sin(angle) * radius);
@@ -170,7 +160,7 @@ const keys = {};
   window.addEventListener(ev, e => keys[e.code] = ev === 'keydown')
 );
 
-let gameState = 'playing'; // 'playing' | 'paused' | 'help' | 'gameOver'
+let gameState = 'playing';
 let score = 0;
 let lives = 3;
 let ship, asteroids, bullets, particles;
@@ -196,17 +186,9 @@ window.addEventListener('keydown', e => {
     gameState = 'playing';
   }
 });
-
-function togglePause() {
-  gameState = gameState === 'paused' ? 'playing' : 'paused';
-}
-function toggleHelp() {
-  gameState = gameState === 'help' ? 'playing' : 'help';
-}
-function quitGame() {
-  gameState = 'gameOver';
-  addScore(score);
-}
+function togglePause() { gameState = gameState === 'paused' ? 'playing' : 'paused'; }
+function toggleHelp() { gameState = gameState === 'help' ? 'playing' : 'help'; }
+function quitGame() { gameState = 'gameOver'; addScore(score); }
 
 /* ---------- Helpers ---------- */
 function screenWrap(obj) {
@@ -215,29 +197,51 @@ function screenWrap(obj) {
   if (obj.pos.y < 0) obj.pos.y = H;
   if (obj.pos.y > H) obj.pos.y = 0;
 }
-
 function explode(pos, color, count = 25) {
   play(pos.len() > 60 ? S.bangL : S.bangS, 0.2, 'sawtooth');
   for (let i = 0; i < count; i++) particles.push(new Particle(pos, color));
 }
 
-function shipCollision() {
-  if (ship.inv > 0) return;
-  for (const a of asteroids) {
-    const dx = ship.pos.x - a.pos.x;
-    const dy = ship.pos.y - a.pos.y;
-    const dist = Math.sqrt(dx * dx + dy * dy);
-    if (dist < a.r + ship.size) {
-      explode(ship.pos, '#ff00e6', 40);
-      lives--;
-      if (lives <= 0) {
-        quitGame();
-      } else {
-        ship.pos.set(W / 2, H / 2);
-        ship.vel.set(0, 0);
-        ship.inv = 120; // 2 s invulnerability
+/* ---------- SAFE collision handling ---------- */
+function handleCollisions() {
+  /* bullets vs asteroids (backwards loops to avoid mutation issues) */
+  for (let i = bullets.length - 1; i >= 0; i--) {
+    const b = bullets[i];
+    for (let j = asteroids.length - 1; j >= 0; j--) {
+      const a = asteroids[j];
+      const dx = b.pos.x - a.pos.x;
+      const dy = b.pos.y - a.pos.y;
+      if (Math.sqrt(dx * dx + dy * dy) < a.r) {
+        bullets.splice(i, 1);
+        explode(a.pos, a.color, Math.floor(a.r));
+        score += Math.floor(1000 / a.r);
+        if (a.r > 20) {
+          asteroids.push(new Asteroid(a.pos.clone(), a.r * 0.6));
+          asteroids.push(new Asteroid(a.pos.clone(), a.r * 0.6));
+        }
+        asteroids.splice(j, 1);
+        break;
       }
-      return;
+    }
+  }
+
+  /* ship vs asteroids (radius check) */
+  if (ship.inv <= 0) {
+    for (const a of asteroids) {
+      const dx = ship.pos.x - a.pos.x;
+      const dy = ship.pos.y - a.pos.y;
+      if (Math.sqrt(dx * dx + dy * dy) < a.r + ship.size) {
+        explode(ship.pos, '#ff00e6', 40);
+        lives--;
+        if (lives <= 0) {
+          quitGame();
+        } else {
+          ship.pos.set(W / 2, H / 2);
+          ship.vel.set(0, 0);
+          ship.inv = 120;
+        }
+        return;
+      }
     }
   }
 }
@@ -263,23 +267,7 @@ function update() {
   bullets = bullets.filter(b => b.life > 0);
   particles = particles.filter(p => p.life > 0);
 
-  /* bullets vs asteroids */
-  bullets.forEach((b, bi) => {
-    asteroids.forEach((a, ai) => {
-      if (Math.hypot(b.pos.x - a.pos.x, b.pos.y - a.pos.y) < a.r) {
-        bullets.splice(bi, 1);
-        explode(a.pos, a.color, Math.floor(a.r));
-        score += Math.floor(1000 / a.r);
-        asteroids.splice(ai, 1);
-        if (a.r > 20) {
-          asteroids.push(new Asteroid(a.pos.clone(), a.r * 0.6));
-          asteroids.push(new Asteroid(a.pos.clone(), a.r * 0.6));
-        }
-      }
-    });
-  });
-
-  shipCollision();
+  handleCollisions();
 }
 
 function drawHUD() {
