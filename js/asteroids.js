@@ -1,4 +1,4 @@
-/* ---------- Web-Audio “chip” sounds ---------- */
+/* ---------- Web-Audio "chip" sounds ---------- */
 const actx = new (window.AudioContext || window.webkitAudioContext)();
 const S = {
   thrust: 220, fire: 800, bangL: 150, bangS: 400
@@ -30,6 +30,7 @@ class Vec {
   mul(s) { this.x *= s; this.y *= s; return this; }
   len() { return Math.hypot(this.x, this.y); }
   clone() { return new Vec(this.x, this.y); }
+  set(x, y) { this.x = x; this.y = y; return this; }
   static fromAngle(a) { return new Vec(Math.cos(a), Math.sin(a)); }
 }
 
@@ -111,7 +112,7 @@ class Ship {
     this.thrusting = false;
     this.size = 15;
     this.inv = 0;
-    this.cooldown = 0; // collision cooldown
+    this.cooldown = 0;
   }
   update() {
     if (keys['ArrowUp']) {
@@ -149,6 +150,14 @@ class Ship {
       ctx.stroke();
     }
     ctx.restore();
+  }
+  
+  respawn() {
+    this.pos.set(W / 2, H / 2);
+    this.vel.set(0, 0);
+    this.angle = 0;
+    this.inv = 120;
+    this.cooldown = 30;
   }
 }
 
@@ -203,60 +212,95 @@ function explode(pos, color, count = 25) {
   for (let i = 0; i < count; i++) particles.push(new Particle(pos, color));
 }
 
+function clearSpaceAroundShip() {
+  const safeRadius = 80;
+  const shipX = W / 2;
+  const shipY = H / 2;
+  
+  asteroids.forEach(ast => {
+    const dx = ast.pos.x - shipX;
+    const dy = ast.pos.y - shipY;
+    const distance = Math.sqrt(dx * dx + dy * dy);
+    
+    if (distance < safeRadius + ast.r) {
+      const angle = Math.atan2(dy, dx);
+      const newDistance = safeRadius + ast.r + 10;
+      ast.pos.x = shipX + Math.cos(angle) * newDistance;
+      ast.pos.y = shipY + Math.sin(angle) * newDistance;
+      screenWrap(ast);
+    }
+  });
+}
+
 /* ---------- SAFE collision handling ---------- */
 function handleCollisions() {
-  /* bullets vs asteroids (backwards loops) */
+  // Handle bullet-asteroid collisions
   for (let i = bullets.length - 1; i >= 0; i--) {
-    const b = bullets[i];
+    const bullet = bullets[i];
+    let bulletHit = false;
+    
     for (let j = asteroids.length - 1; j >= 0; j--) {
-      const a = asteroids[j];
-      const dx = b.pos.x - a.pos.x;
-      const dy = b.pos.y - a.pos.y;
-      if (Math.sqrt(dx * dx + dy * dy) < a.r) {
+      const asteroid = asteroids[j];
+      const dx = bullet.pos.x - asteroid.pos.x;
+      const dy = bullet.pos.y - asteroid.pos.y;
+      const distance = Math.sqrt(dx * dx + dy * dy);
+      
+      if (distance < asteroid.r) {
         bullets.splice(i, 1);
-        explode(a.pos, a.color, Math.floor(a.r));
-        score += Math.floor(1000 / a.r);
-        if (a.r > 20) {
-          asteroids.push(new Asteroid(a.pos.clone(), a.r * 0.6));
-          asteroids.push(new Asteroid(a.pos.clone(), a.r * 0.6));
+        bulletHit = true;
+        
+        score += Math.floor(1000 / asteroid.r);
+        explode(asteroid.pos, asteroid.color, Math.floor(asteroid.r));
+        
+        if (asteroid.r > 20) {
+          const newRadius = asteroid.r * 0.6;
+          asteroids.push(new Asteroid(asteroid.pos.clone(), newRadius));
+          asteroids.push(new Asteroid(asteroid.pos.clone(), newRadius));
         }
+        
         asteroids.splice(j, 1);
         break;
       }
     }
+    
+    if (bulletHit) break;
   }
 
-  /* ship vs asteroids (cooldown + clear-spawn) */
-  if (ship.inv > 0 || (ship.cooldown && --ship.cooldown)) return;
-  for (const a of asteroids) {
-    const dx = ship.pos.x - a.pos.x;
-    const dy = ship.pos.y - a.pos.y;
-    if (Math.sqrt(dx * dx + dy * dy) < a.r + ship.size) {
-      explode(ship.pos, '#ff00e6', 40);
-      lives--;
-      if (lives <= 0) {
-        quitGame();
-        return;
-      }
-
-      /* push asteroids away from spawn point */
-      const safeRadius = 80;
-      asteroids.forEach(ast => {
-        const d = Math.hypot(ast.pos.x - W / 2, ast.pos.y - H / 2);
-        if (d < safeRadius + ast.r) {
-          const angle = Math.atan2(ast.pos.y - H / 2, ast.pos.x - W / 2);
-          ast.pos.x = W / 2 + Math.cos(angle) * (safeRadius + ast.r);
-          ast.pos.y = H / 2 + Math.sin(angle) * (safeRadius + ast.r);
-          screenWrap(ast);
+  // Handle ship-asteroid collisions
+  if (ship.inv <= 0 && ship.cooldown <= 0) {
+    for (const asteroid of asteroids) {
+      const dx = ship.pos.x - asteroid.pos.x;
+      const dy = ship.pos.y - asteroid.pos.y;
+      const distance = Math.sqrt(dx * dx + dy * dy);
+      
+      if (distance < asteroid.r + ship.size) {
+        explode(ship.pos, '#ff00e6', 40);
+        lives--;
+        
+        if (lives <= 0) {
+          quitGame();
+          return;
         }
-      });
-
-      /* reset ship */
-      ship.pos.set(W / 2, H / 2);
-      ship.vel.set(0, 0);
-      ship.inv = 120;
-      ship.cooldown = 30;
-      return;
+        
+        clearSpaceAroundShip();
+        ship.respawn();
+        break;
+      }
+    }
+  }
+  
+  // Spawn new asteroids if all are destroyed
+  if (asteroids.length === 0) {
+    const newCount = Math.min(8, 3 + Math.floor(score / 5000));
+    for (let i = 0; i < newCount; i++) {
+      let pos;
+      let attempts = 0;
+      do {
+        pos = new Vec(Math.random() * W, Math.random() * H);
+        attempts++;
+      } while (attempts < 50 && Math.hypot(pos.x - ship.pos.x, pos.y - ship.pos.y) < 100);
+      
+      asteroids.push(new Asteroid(pos));
     }
   }
 }
